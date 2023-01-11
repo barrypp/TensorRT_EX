@@ -9,15 +9,15 @@ using namespace nvinfer1;
 sample::Logger gLogger;
 
 // stuff we know about the network and the input/output blobs
-static int INPUT_H = 220;
-static int INPUT_W = 220;
-static int INPUT_C = 3;
-static int OUT_SCALE = 4;
+static int INPUT_H = -1;
+static int INPUT_W = -1;
+static int INPUT_C = -1;
+static int OUT_SCALE = -1;
 static int OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
-static int precision_mode = 32; // fp32 : 32, fp16 : 16, int8(ptq) : 8
+static int precision_mode = -1; // fp32 : 32, fp16 : 16, int8(ptq) : 8
 
-std::string INPUT_BLOB_NAME = "INPUT";
-std::string OUTPUT_BLOB_NAME = "OUTPUT";
+const std::string INPUT_BLOB_NAME = "INPUT";
+const std::string OUTPUT_BLOB_NAME = "OUTPUT";
 
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
@@ -192,8 +192,8 @@ int main()
     OUT_SCALE = j["OUT_SCALE"];
     OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
     precision_mode = j["precision_mode"];
-    INPUT_BLOB_NAME = j["INPUT_BLOB_NAME"];
-    OUTPUT_BLOB_NAME = j["OUTPUT_BLOB_NAME"];
+    //std::string INPUT_dir = "INPUT";
+    //std::string OUTPUT_dir = "OUTPUT";
 
 
     unsigned int maxBatchSize = j["maxBatchSize"];	// batch size 
@@ -254,9 +254,9 @@ int main()
     CHECK(cudaMalloc(&buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t)));
 
     // 4) Prepare image data for inputs
-    std::string img_dir = INPUT_BLOB_NAME;
+    std::cout << "===== Begin img process =====" << std::endl << std::endl;
     std::vector<std::string> file_names;
-    if (SearchFile(img_dir.c_str(), file_names) < 0) { // search files
+    if (SearchFile("INPUT", file_names) < 0) { // search files
         std::cerr << "[ERROR] Data search error" << std::endl;
     }
     else {
@@ -267,56 +267,44 @@ int main()
     cv::Mat ori_img;
     std::vector<uint8_t> input(maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
     std::vector<uint8_t> outputs(OUTPUT_SIZE);
-    for (int idx = 0; idx < maxBatchSize; idx++) { // mat -> vector<uint8_t> 
-        cv::Mat ori_img = cv::imread(file_names[idx]);
-        cv::resize(ori_img, img, img.size()); // resize image to input size
-        memcpy(input.data(), img.data, maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
-    }
-    std::cout << "===== input load done =====" << std::endl << std::endl;
-
-    uint64_t dur_time = 0;
-    uint64_t iter_count = 10;
+    char OUTPUT_fileName[255];
 
     // Generate CUDA stream
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
+    char file_name[256];
+    for (int idx = 0; idx != file_names.size(); idx++) { // mat -> vector<uint8_t> 
+        //read
+        sscanf(file_names[idx].c_str(), "INPUT/%s", file_name);//not good but work
+        cv::Mat ori_img = cv::imread(file_names[idx]);
+        cv::resize(ori_img, img, img.size()); // resize image to input size
+        memcpy(input.data(), img.data, maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
 
-    // warm-up
-    std::cout << "===== warm-up begin =====" << std::endl << std::endl;
-    CHECK(cudaMemcpyAsync(buffers[inputIndex], input.data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
-    context->enqueue(maxBatchSize, buffers, stream, nullptr);
-    CHECK(cudaMemcpyAsync(outputs.data(), buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream));
-    cudaStreamSynchronize(stream);
-    std::cout << "===== warm-up done =====" << std::endl << std::endl;
-
-    // 5) Inference  
-    for (int i = 0; i < iter_count; i++) {
-        auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-
+        // Inference
         CHECK(cudaMemcpyAsync(buffers[inputIndex], input.data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
         context->enqueue(maxBatchSize, buffers, stream, nullptr);
         CHECK(cudaMemcpyAsync(outputs.data(), buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream));
         cudaStreamSynchronize(stream);
 
-        auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
-        dur_time += dur;
+        //output
+        cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, outputs.data());
+        //cv::imshow("result", frame);
+        //cv::waitKey(0);
+        sprintf(OUTPUT_fileName, "./OUTPUT/%s", file_name);
+        cv::imwrite(OUTPUT_fileName, frame);
+        //tofile(outputs, "../Validation_py/c"); // ouputs data to files
+        std::cout << OUTPUT_fileName << " done" << std::endl;
     }
 
     // 6) Print results
-    std::cout << "==================================================" << std::endl;
-    std::cout << "Model : " << engine_file_path << ", Precision : " << precision_mode << std::endl;
-    std::cout << iter_count << " th Iteration" << std::endl;
-    std::cout << "Total duration time with data transfer : " << dur_time << " [milliseconds]" << std::endl;
-    std::cout << "Avg duration time with data transfer : " << dur_time / iter_count << " [milliseconds]" << std::endl;
-    std::cout << "FPS : " << 1000.f / (dur_time / iter_count) << " [frame/sec]" << std::endl;
-    std::cout << "===== TensorRT Model Calculate done =====" << std::endl;
-    std::cout << "==================================================" << std::endl;
-
-    cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, outputs.data());
-    cv::imshow("result", frame);
-    cv::waitKey(0);
-    cv::imwrite("../result.png", frame);
-    //tofile(outputs, "../Validation_py/c"); // ouputs data to files
+    //std::cout << "==================================================" << std::endl;
+    //std::cout << "Model : " << engine_file_path << ", Precision : " << precision_mode << std::endl;
+    //std::cout << iter_count << " th Iteration" << std::endl;
+    //std::cout << "Total duration time with data transfer : " << dur_time << " [milliseconds]" << std::endl;
+    //std::cout << "Avg duration time with data transfer : " << dur_time / iter_count << " [milliseconds]" << std::endl;
+    //std::cout << "FPS : " << 1000.f / (dur_time / iter_count) << " [frame/sec]" << std::endl;
+    //std::cout << "===== TensorRT Model Calculate done =====" << std::endl;
+    //std::cout << "==================================================" << std::endl;
 
     // Release stream and buffers ...
     cudaStreamDestroy(stream);
