@@ -1,6 +1,30 @@
 # TensorRT_EX
 
-## Enviroments
+## Windows
+
+- build prepare
+  - CUDA ,latest version may not compatible with TensorRT, https://developer.nvidia.com/cuda-toolkit-archive
+  - TensorRT https://developer.nvidia.com/tensorrt
+  - opencv, https://github.com/opencv/opencv/releases
+
+- exe runtime prepare (no build)
+  - vsmlrt-cuda, for cuda dll, https://github.com/AmusementClub/vs-mlrt/releases
+  - opencv dll, https://github.com/opencv/opencv/releases
+  - make sure following dir structure
+	- ./vsmlrt-cuda/nvblas64_11.dll
+	- ./vsmlrt-cuda/nvinfer_builder_resource.dll
+	- ./vsmlrt-cuda/...
+	- ./nvinfer.dll
+	- ./opencv_world470.dll
+	- ./module/RealESRGAN_x4plus.wts
+	- ./module/...
+	- ./INPUT/...
+	- ./OUTPUT/...
+	- ./TensorRT.exe
+	- ./TensorRT.config.json
+	
+
+## Enviroments (original)
 ***
 - Windows 10 laptop
 - CPU i7-11375H

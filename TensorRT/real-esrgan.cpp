@@ -3,39 +3,42 @@
 #include "postprocess.hpp"	// postprocess plugin 
 #include "logging.hpp"	
 #include "calibrator.h"		// ptq
+#include "json.hpp"
 
 using namespace nvinfer1;
 sample::Logger gLogger;
 
 // stuff we know about the network and the input/output blobs
-static const int INPUT_H = 220;
-static const int INPUT_W = 220;
-static const int INPUT_C = 3;
-static const int OUT_SCALE = 2;
-static const int OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
-static const int precision_mode = 32; // fp32 : 32, fp16 : 16, int8(ptq) : 8
+static int INPUT_H = 220;
+static int INPUT_W = 220;
+static int INPUT_C = 3;
+static int OUT_SCALE = 4;
+static int OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
+static int precision_mode = 32; // fp32 : 32, fp16 : 16, int8(ptq) : 8
 
-const char* INPUT_BLOB_NAME = "data";
-const char* OUTPUT_BLOB_NAME = "prob";
+std::string INPUT_BLOB_NAME = "INPUT";
+std::string OUTPUT_BLOB_NAME = "OUTPUT";
 
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 
 // Creat the engine using only the API and not any parser.
-void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, char* engineFileName)
+void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, char* engineFileName, 
+    std::string modulePath, std::string moduleName)
 {
     std::cout << "==== model build start ====" << std::endl << std::endl;
     INetworkDefinition* network = builder->createNetworkV2(0U);
     std::map<std::string, Weights> weightMap;
-    if (OUT_SCALE == 2) {
-        weightMap = loadWeights("../Real-ESRGAN_py/RealESRGAN_x2plus.wts");
-    }
-    else {
-        weightMap = loadWeights("../Real-ESRGAN_py/real-esrgan.wts");
-    }
+    weightMap = loadWeights("./" + modulePath + "/" + moduleName + ".wts");//not good but work
+    //if (OUT_SCALE == 2) {
+    //    weightMap = loadWeights("../Real-ESRGAN_py/RealESRGAN_x2plus.wts");
+    //}
+    //else {
+    //    weightMap = loadWeights("RealESRGAN_x4plus.wts");
+    //}
     Weights emptywts{ DataType::kFLOAT, nullptr, 0 };
 
-    ITensor* data = network->addInput(INPUT_BLOB_NAME, dt, Dims3{ INPUT_H, INPUT_W, INPUT_C });
+    ITensor* data = network->addInput(INPUT_BLOB_NAME.c_str(), dt, Dims3{ INPUT_H, INPUT_W, INPUT_C });
     assert(data);
 
     Preprocess preprocess{ maxBatchSize, INPUT_C, INPUT_H, INPUT_W, 0 };// Custom(preprocess) plugin 
@@ -129,7 +132,7 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
 
     ITensor* final_tensor = postprocess_layer->getOutput(0);
     //show_dims(final_tensor);
-    final_tensor->setName(OUTPUT_BLOB_NAME);
+    final_tensor->setName(OUTPUT_BLOB_NAME.c_str());
     network->markOutput(*final_tensor);
 
     // Build engine
@@ -176,12 +179,31 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
 
 int main()
 {
-    unsigned int maxBatchSize = 1;			// batch size 
-    bool serialize = true;					// TensorRT Model Serialize flag(true : generate engine, false : if no engine file, generate engine )
-    char engineFileName[] = "real-esrgan";	// model name
+    ::SetDllDirectoryA("./vsmlrt-cuda");
+
+    //config
+    using json = nlohmann::json;
+    std::ifstream config_if("TensorRT.config.json");
+    json j = json::parse(config_if);
+
+    INPUT_H = j["INPUT_H"];
+    INPUT_W = j["INPUT_W"];
+    INPUT_C = j["INPUT_C"];
+    OUT_SCALE = j["OUT_SCALE"];
+    OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
+    precision_mode = j["precision_mode"];
+    INPUT_BLOB_NAME = j["INPUT_BLOB_NAME"];
+    OUTPUT_BLOB_NAME = j["OUTPUT_BLOB_NAME"];
+
+
+    unsigned int maxBatchSize = j["maxBatchSize"];	// batch size 
+    bool serialize = j["serialize"];			// TensorRT Model Serialize flag(true : generate engine, false : if no engine file, generate engine )
+    std::string moduleName = j["moduleName"];	// model name
+    std::string modulePath = j["modulePath"];
 
     char engine_file_path[256];
-    sprintf(engine_file_path, "../Engine/%s_%d.engine", engineFileName, precision_mode);
+    sprintf(engine_file_path, "./%s/%s_%d_" "%d_%d_%d_" "%d_" ".engine", modulePath.c_str(),
+        moduleName.c_str(), precision_mode, INPUT_H, INPUT_W, INPUT_C, OUT_SCALE); //don't know if need this much
 
     // checking engine file existence
     bool exist_engine = false;
@@ -194,7 +216,7 @@ int main()
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
         IBuilder* builder = createInferBuilder(gLogger);
         IBuilderConfig* config = builder->createBuilderConfig();
-        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path); // generation TensorRT Model
+        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path, modulePath, moduleName); // generation TensorRT Model
         builder->destroy();
         config->destroy();
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
@@ -224,15 +246,15 @@ int main()
     IExecutionContext* context = engine->createExecutionContext();
     delete[] trtModelStream;
     void* buffers[2];
-    const int inputIndex = engine->getBindingIndex(INPUT_BLOB_NAME);
-    const int outputIndex = engine->getBindingIndex(OUTPUT_BLOB_NAME);
+    const int inputIndex = engine->getBindingIndex(INPUT_BLOB_NAME.c_str());
+    const int outputIndex = engine->getBindingIndex(OUTPUT_BLOB_NAME.c_str());
 
     // Allocating memory space for inputs and outputs on the GPU
     CHECK(cudaMalloc(&buffers[inputIndex], maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t)));
     CHECK(cudaMalloc(&buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t)));
 
     // 4) Prepare image data for inputs
-    std::string img_dir = "../Real-ESRGAN_py/data/";
+    std::string img_dir = INPUT_BLOB_NAME;
     std::vector<std::string> file_names;
     if (SearchFile(img_dir.c_str(), file_names) < 0) { // search files
         std::cerr << "[ERROR] Data search error" << std::endl;
@@ -282,7 +304,7 @@ int main()
 
     // 6) Print results
     std::cout << "==================================================" << std::endl;
-    std::cout << "Model : " << engineFileName << ", Precision : " << precision_mode << std::endl;
+    std::cout << "Model : " << engine_file_path << ", Precision : " << precision_mode << std::endl;
     std::cout << iter_count << " th Iteration" << std::endl;
     std::cout << "Total duration time with data transfer : " << dur_time << " [milliseconds]" << std::endl;
     std::cout << "Avg duration time with data transfer : " << dur_time / iter_count << " [milliseconds]" << std::endl;

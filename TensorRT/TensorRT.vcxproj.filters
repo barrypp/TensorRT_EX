@@ -34,6 +34,9 @@
     <ClInclude Include="postprocess.hpp">
       <Filter>plugin</Filter>
     </ClInclude>
+    <ClInclude Include="json.hpp">
+      <Filter>utils</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="plugin">

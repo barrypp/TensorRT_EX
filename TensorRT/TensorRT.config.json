@@ -1,0 +1,13 @@
+{
+    "INPUT_H": 220,
+    "INPUT_W": 220,
+    "INPUT_C": 3,
+    "OUT_SCALE": 4,
+    "precision_mode": 32,
+    "INPUT_BLOB_NAME": "INPUT",
+    "OUTPUT_BLOB_NAME": "OUTPUT",
+    "maxBatchSize":1,
+    "serialize":false,
+    "moduleName":"RealESRGAN_x4plus",
+    "modulePath":"module"
+  }
