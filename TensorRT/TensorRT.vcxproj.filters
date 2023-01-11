@@ -37,6 +37,9 @@
     <ClInclude Include="json.hpp">
       <Filter>utils</Filter>
     </ClInclude>
+    <ClInclude Include="lightweightsemaphore.h" />
+    <ClInclude Include="concurrentqueue.h" />
+    <ClInclude Include="blockingconcurrentqueue.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="plugin">

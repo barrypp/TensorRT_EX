@@ -90,12 +90,15 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="blockingconcurrentqueue.h" />
     <ClInclude Include="calibrator.h">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
     </ClInclude>
     <ClInclude Include="common.hpp" />
+    <ClInclude Include="concurrentqueue.h" />
     <ClInclude Include="json.hpp" />
+    <ClInclude Include="lightweightsemaphore.h" />
     <ClInclude Include="logging.hpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
     </ClInclude>

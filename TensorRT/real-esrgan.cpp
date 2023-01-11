@@ -5,6 +5,8 @@
 #include "calibrator.h"		// ptq
 #include "json.hpp"
 #include <filesystem>
+#include "blockingconcurrentqueue.h"
+
 
 using namespace nvinfer1;
 sample::Logger gLogger;
@@ -16,12 +18,162 @@ static int INPUT_C = -1;
 static int OUT_SCALE = -1;
 static int OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
 static int precision_mode = -1; // fp32 : 32, fp16 : 16, int8(ptq) : 8
+unsigned int maxBatchSize = 0;
 
 const std::string INPUT_BLOB_NAME = "INPUT";
 const std::string OUTPUT_BLOB_NAME = "OUTPUT";
 
+std::filesystem::path INPUT_dir;
+std::filesystem::path OUTPUT_dir;
+std::filesystem::path engine_file_path;
+
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
+
+moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, std::filesystem::directory_entry>> load_to_proc;
+moodycamel::BlockingConcurrentQueue<int> proc_to_load;
+moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, std::filesystem::directory_entry>> proc_to_save;
+moodycamel::BlockingConcurrentQueue<int> save_to_proc;
+
+void load()
+{
+    namespace fs = std::filesystem;
+
+    cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
+    cv::Mat ori_img;
+
+    int load_to_proc_size = -5;//max queue size
+
+    for (auto const& dir_entry : fs::directory_iterator{ INPUT_dir })
+    {
+        cv::Mat ori_img = cv::imread(dir_entry.path().string());
+        cv::resize(ori_img, img, img.size()); // resize image to input size
+        std::vector<uint8_t> data{ img.data ,img.data + maxBatchSize * INPUT_H * INPUT_W * INPUT_C };
+
+        load_to_proc_size++;
+        load_to_proc.enqueue({ std::move(data), dir_entry });
+        //std::cout << "load_to_proc.enqueue" << dir_entry <<std::endl;
+
+        if (load_to_proc_size > 0)
+        {
+            int T;
+            proc_to_load.wait_dequeue(T);
+            load_to_proc_size--;
+        }
+    }
+
+    load_to_proc.enqueue({ std::vector<uint8_t>{}, fs::directory_entry{} });
+}
+
+void proc()
+{
+    namespace fs = std::filesystem;
+
+    // 2) Load engine file 
+    char* trtModelStream{ nullptr };
+    size_t size{ 0 };
+    std::cout << "===== Engine file load =====" << std::endl << std::endl;
+    std::ifstream file(engine_file_path, std::ios::binary);
+    if (file.good()) {
+        file.seekg(0, file.end);
+        size = file.tellg();
+        file.seekg(0, file.beg);
+        trtModelStream = new char[size];
+        file.read(trtModelStream, size);
+        file.close();
+    }
+    else {
+        std::cout << "[ERROR] Engine file load error" << std::endl;
+        exit(1);
+    }
+
+    // 3) Engine file deserialize
+    std::cout << "===== Engine file deserialize =====" << std::endl << std::endl;
+    IRuntime* runtime = createInferRuntime(gLogger);
+    ICudaEngine* engine = runtime->deserializeCudaEngine(trtModelStream, size);
+    IExecutionContext* context = engine->createExecutionContext();
+    delete[] trtModelStream;
+    void* buffers[2];
+    const int inputIndex = engine->getBindingIndex(INPUT_BLOB_NAME.c_str());
+    const int outputIndex = engine->getBindingIndex(OUTPUT_BLOB_NAME.c_str());
+
+    // Allocating memory space for inputs and outputs on the GPU
+    CHECK(cudaMalloc(&buffers[inputIndex], maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t)));
+    CHECK(cudaMalloc(&buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t)));
+
+    // Generate CUDA stream
+    cudaStream_t stream;
+    CHECK(cudaStreamCreate(&stream));
+
+    int proc_to_save_size = -5;//max queue size
+    for (;;)
+    {
+        std::tuple<std::vector<uint8_t>, fs::directory_entry> input;
+        std::vector<uint8_t> outputs(OUTPUT_SIZE);
+
+        load_to_proc.wait_dequeue(input);
+        proc_to_load.enqueue(0);
+        if (std::get<0>(input).size() == 0) break;
+
+        CHECK(cudaMemcpyAsync(buffers[inputIndex], std::get<0>(input).data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
+        context->enqueue(maxBatchSize, buffers, stream, nullptr);
+        CHECK(cudaMemcpyAsync(outputs.data(), buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream));
+        cudaStreamSynchronize(stream);
+
+        proc_to_save_size++;
+        proc_to_save.enqueue({ std::move(outputs) ,std::get<1>(input) });
+        //std::cout << "proc_to_save.enqueue" << std::get<1>(input) <<std::endl;
+
+        if (proc_to_save_size > 0)
+        {
+            int T;
+            save_to_proc.wait_dequeue(T);
+            proc_to_save_size--;
+        }
+    }
+
+    // Release stream and buffers ...
+    cudaStreamDestroy(stream);
+    CHECK(cudaFree(buffers[inputIndex]));
+    CHECK(cudaFree(buffers[outputIndex]));
+    context->destroy();
+    engine->destroy();
+    runtime->destroy();
+
+    proc_to_save.enqueue({ std::vector<uint8_t>{}, fs::directory_entry{} });
+}
+
+void save()
+{
+    namespace fs = std::filesystem;
+
+    auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    int count = 0;
+    for (;;)
+    {
+        std::tuple<std::vector<uint8_t>, fs::directory_entry> data;
+
+        proc_to_save.wait_dequeue(data);
+        save_to_proc.enqueue(0);
+        if (std::get<0>(data).size() == 0) break;
+
+        cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, std::get<0>(data).data());
+        //cv::imshow("result", frame);
+        //cv::waitKey(0);
+        cv::imwrite((OUTPUT_dir / std::get<1>(data).path().filename()).string(), frame);
+        //std::cout << "cv::imwrite" << std::get<1>(data) << std::endl;
+        //tofile(outputs, "../Validation_py/c"); // ouputs data to files
+
+        count++;
+        if (count % 10 == 0)
+        {
+            auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
+            std::cout << ((double)count) / dur * 1e3 << " fps/s" << std::endl;
+            start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            count = 0;
+        }
+    }
+}
 
 // Creat the engine using only the API and not any parser.
 void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, const char* engineFileName, 
@@ -201,18 +353,18 @@ int main()
     OUT_SCALE = j["OUT_SCALE"];
     OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
     precision_mode = j["precision_mode"];
-    auto INPUT_dir = fs::current_path() / j["INPUT"];
-    auto OUTPUT_dir = fs::current_path() / j["OUTPUT"];
+    INPUT_dir = fs::current_path() / j["INPUT"];
+    OUTPUT_dir = fs::current_path() / j["OUTPUT"];
 
     //
-    unsigned int maxBatchSize = j["maxBatchSize"];	// batch size 
+    maxBatchSize = j["maxBatchSize"];	// batch size 
     bool serialize = j["serialize"];			// TensorRT Model Serialize flag(true : generate engine, false : if no engine file, generate engine )
     std::string moduleName = j["moduleName"];	// model name
     
     char engine_file_name[256];
     sprintf(engine_file_name, "%s_%d_" "%d_%d_%d_" "%d_" ".engine", moduleName.c_str(),
         precision_mode, INPUT_H, INPUT_W, INPUT_C, OUT_SCALE); //don't know if need this much
-    auto engine_file_path = modulePath / engine_file_name;
+    engine_file_path = modulePath / engine_file_name;
 
     // checking engine file existence
     bool exist_engine = false;
@@ -231,97 +383,24 @@ int main()
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
     }
 
-    // 2) Load engine file 
-    char *trtModelStream{ nullptr };
-    size_t size{ 0 };
-    std::cout << "===== Engine file load =====" << std::endl << std::endl;
-    std::ifstream file(engine_file_path, std::ios::binary);
-    if (file.good()) {
-        file.seekg(0, file.end);
-        size = file.tellg();
-        file.seekg(0, file.beg);
-        trtModelStream = new char[size];
-        file.read(trtModelStream, size);
-        file.close();
-    }
-    else {
-        std::cout << "[ERROR] Engine file load error" << std::endl;
-    }
-
-    // 3) Engine file deserialize
-    std::cout << "===== Engine file deserialize =====" << std::endl << std::endl;
-    IRuntime* runtime = createInferRuntime(gLogger);
-    ICudaEngine* engine = runtime->deserializeCudaEngine(trtModelStream, size);
-    IExecutionContext* context = engine->createExecutionContext();
-    delete[] trtModelStream;
-    void* buffers[2];
-    const int inputIndex = engine->getBindingIndex(INPUT_BLOB_NAME.c_str());
-    const int outputIndex = engine->getBindingIndex(OUTPUT_BLOB_NAME.c_str());
-
-    // Allocating memory space for inputs and outputs on the GPU
-    CHECK(cudaMalloc(&buffers[inputIndex], maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t)));
-    CHECK(cudaMalloc(&buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t)));
 
     // 4) Prepare image data for inputs
     std::cout << "===== Begin img process =====" << std::endl << std::endl;
 
-    cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
-    cv::Mat ori_img;
-    std::vector<uint8_t> input(maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
-    std::vector<uint8_t> outputs(OUTPUT_SIZE);
+    std::thread load_thread(load);
+    std::thread proc_thread(proc);
+    std::thread save_thread(save);
 
-    // Generate CUDA stream
-    cudaStream_t stream;
-    CHECK(cudaStreamCreate(&stream));
-    char file_name[256];
-    auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    int count = 0;
-    for (auto const& dir_entry : fs::directory_iterator{ INPUT_dir })
-    {
-        count++;
-        //read
-        cv::Mat ori_img = cv::imread(dir_entry.path().string());
-        cv::resize(ori_img, img, img.size()); // resize image to input size
-        memcpy(input.data(), img.data, maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
+    load_thread.join();
+    proc_thread.join();
+    save_thread.join();
 
-        // Inference
-        CHECK(cudaMemcpyAsync(buffers[inputIndex], input.data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
-        context->enqueue(maxBatchSize, buffers, stream, nullptr);
-        CHECK(cudaMemcpyAsync(outputs.data(), buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream));
-        cudaStreamSynchronize(stream);
+    std::cout << "===== exit normally =====" << std::endl << std::endl;
 
-        //output
-        cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, outputs.data());
-        //cv::imshow("result", frame);
-        //cv::waitKey(0);
-        cv::imwrite((OUTPUT_dir / dir_entry.path().filename()).string(), frame);
-        //tofile(outputs, "../Validation_py/c"); // ouputs data to files
-        if (count % 10 == 0)
-        {
-            auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
-            std::cout << ((double)count) / dur * 1e3 << "fps/s" << std::endl;
-        }
-    }
-
-    // 6) Print results
-    //std::cout << "==================================================" << std::endl;
-    //std::cout << "Model : " << engine_file_path << ", Precision : " << precision_mode << std::endl;
-    //std::cout << iter_count << " th Iteration" << std::endl;
-    //std::cout << "Total duration time with data transfer : " << dur_time << " [milliseconds]" << std::endl;
-    //std::cout << "Avg duration time with data transfer : " << dur_time / iter_count << " [milliseconds]" << std::endl;
-    //std::cout << "FPS : " << 1000.f / (dur_time / iter_count) << " [frame/sec]" << std::endl;
-    //std::cout << "===== TensorRT Model Calculate done =====" << std::endl;
-    //std::cout << "==================================================" << std::endl;
-
-    // Release stream and buffers ...
-    cudaStreamDestroy(stream);
-    CHECK(cudaFree(buffers[inputIndex]));
-    CHECK(cudaFree(buffers[outputIndex]));
-    context->destroy();
-    engine->destroy();
-    runtime->destroy();
     return 0;
 }
+
+
 
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname)
 {
