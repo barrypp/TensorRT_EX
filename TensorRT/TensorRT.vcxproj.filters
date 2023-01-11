@@ -4,21 +4,13 @@
     <ClCompile Include="utils.cpp">
       <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="plugin_ex1.cpp" />
-    <ClCompile Include="vgg11.cpp" />
     <ClCompile Include="calibrator.cpp">
       <Filter>calibrate</Filter>
     </ClCompile>
     <ClCompile Include="common.cpp">
       <Filter>calibrate</Filter>
     </ClCompile>
-    <ClCompile Include="unet.cpp" />
-    <ClCompile Include="detr_trt.cpp" />
-    <ClCompile Include="yolov5s.cpp" />
     <ClCompile Include="real-esrgan.cpp" />
-    <ClCompile Include="resnet18.cpp" />
-    <ClCompile Include="yolov6.cpp" />
-    <ClCompile Include="yolov7.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preprocess.hpp">

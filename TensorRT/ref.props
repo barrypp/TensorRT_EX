@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros">
+    <OPENCV_HOME>C:\ProgramFiles\opencv\build</OPENCV_HOME>
+    <TRT_HOME>C:\ProgramFiles\TensorRT-8.5.2.2</TRT_HOME>
+  </PropertyGroup>
+  <PropertyGroup />
+  <ItemDefinitionGroup />
+  <ItemGroup>
+    <BuildMacro Include="OPENCV_HOME">
+      <Value>$(OPENCV_HOME)</Value>
+    </BuildMacro>
+    <BuildMacro Include="TRT_HOME">
+      <Value>$(TRT_HOME)</Value>
+    </BuildMacro>
+  </ItemGroup>
+</Project>
