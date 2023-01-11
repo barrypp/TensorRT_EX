@@ -4,6 +4,7 @@
 #include "logging.hpp"	
 #include "calibrator.h"		// ptq
 #include "json.hpp"
+#include <filesystem>
 
 using namespace nvinfer1;
 sample::Logger gLogger;
@@ -23,7 +24,7 @@ ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, W
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 
 // Creat the engine using only the API and not any parser.
-void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, char* engineFileName, 
+void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, const char* engineFileName, 
     std::string modulePath, std::string moduleName)
 {
     std::cout << "==== model build start ====" << std::endl << std::endl;
@@ -179,7 +180,15 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
 
 int main()
 {
-    ::SetDllDirectoryA("./vsmlrt-cuda");
+    namespace fs = std::filesystem;
+
+    char* exe_path_raw[2048] = {'\0'};
+    GetModuleFileNameA(NULL, (LPSTR)exe_path_raw, 2048);
+    auto exe_path = fs::path{ std::string{ (char*)exe_path_raw } }.parent_path();
+
+    ::SetDllDirectoryA((exe_path / "vsmlrt-cuda").string().c_str());
+    fs::path modulePath = exe_path / "module";
+    std::cout << "modulePath: " << modulePath << std::endl;
 
     //config
     using json = nlohmann::json;
@@ -192,22 +201,22 @@ int main()
     OUT_SCALE = j["OUT_SCALE"];
     OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
     precision_mode = j["precision_mode"];
-    //std::string INPUT_dir = "INPUT";
-    //std::string OUTPUT_dir = "OUTPUT";
+    auto INPUT_dir = fs::current_path() / j["INPUT"];
+    auto OUTPUT_dir = fs::current_path() / j["OUTPUT"];
 
-
+    //
     unsigned int maxBatchSize = j["maxBatchSize"];	// batch size 
     bool serialize = j["serialize"];			// TensorRT Model Serialize flag(true : generate engine, false : if no engine file, generate engine )
     std::string moduleName = j["moduleName"];	// model name
-    std::string modulePath = j["modulePath"];
-
-    char engine_file_path[256];
-    sprintf(engine_file_path, "./%s/%s_%d_" "%d_%d_%d_" "%d_" ".engine", modulePath.c_str(),
-        moduleName.c_str(), precision_mode, INPUT_H, INPUT_W, INPUT_C, OUT_SCALE); //don't know if need this much
+    
+    char engine_file_name[256];
+    sprintf(engine_file_name, "%s_%d_" "%d_%d_%d_" "%d_" ".engine", moduleName.c_str(),
+        precision_mode, INPUT_H, INPUT_W, INPUT_C, OUT_SCALE); //don't know if need this much
+    auto engine_file_path = modulePath / engine_file_name;
 
     // checking engine file existence
     bool exist_engine = false;
-    if ((access(engine_file_path, 0) != -1)) {
+    if ((access(engine_file_path.string().c_str(), 0) != -1)) {
         exist_engine = true;
     }
 
@@ -216,7 +225,7 @@ int main()
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
         IBuilder* builder = createInferBuilder(gLogger);
         IBuilderConfig* config = builder->createBuilderConfig();
-        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path, modulePath, moduleName); // generation TensorRT Model
+        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path.string().c_str(), modulePath.string(), moduleName); // generation TensorRT Model
         builder->destroy();
         config->destroy();
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
@@ -255,28 +264,23 @@ int main()
 
     // 4) Prepare image data for inputs
     std::cout << "===== Begin img process =====" << std::endl << std::endl;
-    std::vector<std::string> file_names;
-    if (SearchFile("INPUT", file_names) < 0) { // search files
-        std::cerr << "[ERROR] Data search error" << std::endl;
-    }
-    else {
-        std::cout << "Total number of images : " << file_names.size() << std::endl << std::endl;
-    }
 
     cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
     cv::Mat ori_img;
     std::vector<uint8_t> input(maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
     std::vector<uint8_t> outputs(OUTPUT_SIZE);
-    char OUTPUT_fileName[255];
 
     // Generate CUDA stream
     cudaStream_t stream;
     CHECK(cudaStreamCreate(&stream));
     char file_name[256];
-    for (int idx = 0; idx != file_names.size(); idx++) { // mat -> vector<uint8_t> 
+    auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    int count = 0;
+    for (auto const& dir_entry : fs::directory_iterator{ INPUT_dir })
+    {
+        count++;
         //read
-        sscanf(file_names[idx].c_str(), "INPUT/%s", file_name);//not good but work
-        cv::Mat ori_img = cv::imread(file_names[idx]);
+        cv::Mat ori_img = cv::imread(dir_entry.path().string());
         cv::resize(ori_img, img, img.size()); // resize image to input size
         memcpy(input.data(), img.data, maxBatchSize * INPUT_H * INPUT_W * INPUT_C);
 
@@ -290,10 +294,13 @@ int main()
         cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, outputs.data());
         //cv::imshow("result", frame);
         //cv::waitKey(0);
-        sprintf(OUTPUT_fileName, "./OUTPUT/%s", file_name);
-        cv::imwrite(OUTPUT_fileName, frame);
+        cv::imwrite((OUTPUT_dir / dir_entry.path().filename()).string(), frame);
         //tofile(outputs, "../Validation_py/c"); // ouputs data to files
-        std::cout << OUTPUT_fileName << " done" << std::endl;
+        if (count % 10 == 0)
+        {
+            auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
+            std::cout << ((double)count) / dur * 1e3 << "fps/s" << std::endl;
+        }
     }
 
     // 6) Print results

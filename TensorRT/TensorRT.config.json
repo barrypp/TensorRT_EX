@@ -7,5 +7,6 @@
     "maxBatchSize":1,
     "serialize":false,
     "moduleName":"RealESRGAN_x4plus",
-    "modulePath":"module"
+    "INPUT":"INPUT",
+    "OUTPUT":"OUTPUT"
   }
