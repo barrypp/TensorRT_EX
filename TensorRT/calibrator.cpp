@@ -57,7 +57,7 @@ bool Int8EntropyCalibrator2::getBatch(void* bindings[], const char* names[], int
 		std::vector<uint8_t> input_imgs_(input_count_, 0);
 		cv::Mat img(input_h_, input_w_, CV_8UC3);
 		for (int i = img_idx_; i < img_idx_ + batchsize_; i++) {
-			std::cout << img_files_[i] << "  " << i << std::endl;
+			std::cerr << img_files_[i] << "  " << i << std::endl;
 			cv::Mat temp = cv::imread(img_dir_ + img_files_[i]);
 			if (temp.empty()) {
 				std::cerr << "Fatal error: image cannot open!" << std::endl;
@@ -72,7 +72,7 @@ bool Int8EntropyCalibrator2::getBatch(void* bindings[], const char* names[], int
 		std::vector<uint8_t> input_imgs_(input_count_, 0);
 		cv::Mat img(input_h_, input_w_, CV_8UC3);
 		for (int i = img_idx_; i < img_idx_ + batchsize_; i++) {
-			std::cout << img_files_[i] << "  " << i << std::endl;
+			std::cerr << img_files_[i] << "  " << i << std::endl;
 			cv::Mat ori_img = cv::imread(img_dir_ + img_files_[i]);
 			if (ori_img.empty()) {
 				std::cerr << "Fatal error: image cannot open!" << std::endl;
@@ -113,7 +113,7 @@ bool Int8EntropyCalibrator2::getBatch(void* bindings[], const char* names[], int
 		std::vector<uint8_t> input_imgs_(input_count_, 0);
 		cv::Mat img(input_h_, input_w_, CV_8UC3);
 		for (int i = img_idx_; i < img_idx_ + batchsize_; i++) {
-			std::cout << img_files_[i] << "  " << i << std::endl;
+			std::cerr << img_files_[i] << "  " << i << std::endl;
 			cv::Mat ori_img = cv::imread(img_dir_ + img_files_[i]);
 			if (ori_img.empty()) {
 				std::cerr << "Fatal error: image cannot open!" << std::endl;
@@ -161,7 +161,7 @@ bool Int8EntropyCalibrator2::getBatch(void* bindings[], const char* names[], int
 
 const void* Int8EntropyCalibrator2::readCalibrationCache(size_t& length) noexcept
 {
-	std::cout << "reading calib cache: " << calib_table_name_ << std::endl;
+	std::cerr << "reading calib cache: " << calib_table_name_ << std::endl;
 	calib_cache_.clear();
 	std::ifstream input(calib_table_name_, std::ios::binary);
 	input >> std::noskipws;
@@ -175,7 +175,7 @@ const void* Int8EntropyCalibrator2::readCalibrationCache(size_t& length) noexcep
 
 void Int8EntropyCalibrator2::writeCalibrationCache(const void* cache, size_t length) noexcept
 {
-	std::cout << "writing calib cache: " << calib_table_name_ << " size: " << length << std::endl;
+	std::cerr << "writing calib cache: " << calib_table_name_ << " size: " << length << std::endl;
 	std::ofstream output(calib_table_name_, std::ios::binary);
 	output.write(reinterpret_cast<const char*>(cache), length);
 }

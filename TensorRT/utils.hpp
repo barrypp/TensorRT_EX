@@ -39,7 +39,7 @@ void tofile(std::vector<T> &Buffer, std::string fname = "../Validation_py/C_Tens
 	if (fs.is_open())
 		fs.write((const char*)Buffer.data(), Buffer.size() * sizeof(T));
 	fs.close();
-	std::cout << "Done! file production to " << fname << std::endl;
+	std::cerr << "Done! file production to " << fname << std::endl;
 }
 // 데이터 바이너리 파일 로드 (unserialize) 
 // 사용 예) 
@@ -50,11 +50,11 @@ void fromfile(std::vector<T>& Buffer, std::string fname = "../Validation_py/C_Te
 	if (ifs.is_open())
 		ifs.read((char*)Buffer.data(), Buffer.size() * sizeof(T));
 	ifs.close();
-	std::cout << "Done! file load from " << fname << std::endl;
+	std::cerr << "Done! file load from " << fname << std::endl;
 }
 // 최대값 인덱스 출력 함수
 // 사용 예) 
-// std::cout << "index : "<< argMax(output) << " , label name : " << class_names[argMax(output) ] << " , prob : " << output[argMax(output) ] << std::endl;
+// std::cerr << "index : "<< argMax(output) << " , label name : " << class_names[argMax(output) ] << " , prob : " << output[argMax(output) ] << std::endl;
 int argMax(std::vector<float> &output);
 
 // colors table

@@ -79,7 +79,7 @@ void preprocess_cu_1(float* output, unsigned char*input, int batchSize, int heig
     //cudaEventSynchronize(stop);
     //float time;
     //cudaEventElapsedTime(&time, start, stop);
-    //std::cout << "elapsed time :: " << time << std::endl;
+    //std::cerr << "elapsed time :: " << time << std::endl;
     //cudaEventDestroy(start);
     //cudaEventDestroy(stop);
     //elapsed time :: 0.635904 

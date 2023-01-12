@@ -76,7 +76,7 @@ namespace nvinfer1
 			// 출력 검증
 			//cudaDeviceSynchronize();
 			//int count = batchSize * H * W * C;
-			//std::cout << "count : " << count << std::endl;
+			//std::cerr << "count : " << count << std::endl;
 			//std::vector<float> gpuBuffer(count);
 			//cudaMemcpy(gpuBuffer.data(), output, gpuBuffer.size() * sizeof(float), cudaMemcpyDeviceToHost);
 			//std::ofstream ofs("../Validation_py/trt_0", std::ios::binary);
@@ -88,7 +88,7 @@ namespace nvinfer1
 			// 입력 검증
 			//cudaDeviceSynchronize();
 			//int count = batchSize * H * W * C;
-			//std::cout << "count : " << count << std::endl;
+			//std::cerr << "count : " << count << std::endl;
 			//std::vector<uint8_t> gpuBuffer(count);
 			//cudaMemcpy(gpuBuffer.data(), input, gpuBuffer.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
 			//std::ofstream ofs("../Validation_py/trt_1", std::ios::binary);

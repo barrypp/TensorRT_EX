@@ -24,7 +24,7 @@ int SearchFile(const std::string& folder_path, std::vector<std::string> &file_na
 				{
 					std::string sub_folder_path = folder_path + "//" + file_name;
 					SearchFile(sub_folder_path, file_names);
-					std::cout << "a sub_folder path: " << sub_folder_path << std::endl;
+					std::cerr << "a sub_folder path: " << sub_folder_path << std::endl;
 				}
 			}
 			else
@@ -46,7 +46,7 @@ int SearchFile(const std::string& folder_path, std::vector<std::string> &file_na
 }
 
 void valueCheck(std::vector<float>& Input, int IN, int IC, int IH, int IW, bool one) {
-	std::cout << "===== valueCheck func =====" << std::endl;
+	std::cerr << "===== valueCheck func =====" << std::endl;
 	if (one) IN = 1;
 	int tot = IN * IC * IH * IW;
 	if (Input.size() != tot) {
@@ -68,16 +68,16 @@ void valueCheck(std::vector<float>& Input, int IN, int IC, int IH, int IW, bool 
 				W_offset = ⁠h_idx * IW + H_offset;
 				for (int w_idx = 0; w_idx < IW; w_idx++) {
 					g_idx = w_idx + W_offset;
-					std::cout << std::setw(5) << Input[g_idx] << " ";
-				}std::cout << std::endl;
-			}std::cout << std::endl; std::cout << std::endl;
+					std::cerr << std::setw(5) << Input[g_idx] << " ";
+				}std::cerr << std::endl;
+			}std::cerr << std::endl; std::cerr << std::endl;
 		}
 	}
 }
 
 void initTensor(std::vector<float>& output, float start, float step)
 {
-	std::cout << "===== InitTensor func (scalar or step)=====" << std::endl;
+	std::cerr << "===== InitTensor func (scalar or step)=====" << std::endl;
 	float count = start;
 	for (int i = 0; i < output.size(); i++) {
 		output[i] = count;
@@ -87,7 +87,7 @@ void initTensor(std::vector<float>& output, float start, float step)
 
 void initTensor(std::vector<float>& output, std::string random, float min, float max)
 {
-	std::cout << "===== InitTensor func (random value) =====" << std::endl;
+	std::cerr << "===== InitTensor func (random value) =====" << std::endl;
 
 	for (int i = 0; i < output.size(); i++) {
 		output[i] = min + static_cast <float> (rand()) / (static_cast <float> (RAND_MAX / (max - min)));
@@ -95,8 +95,8 @@ void initTensor(std::vector<float>& output, std::string random, float min, float
 }
 
 void initTensor(std::vector<float>& output, int N, int C, int H, int W, float start, float step) {
-	std::cout << "===== scalarTensor func =====" << std::endl;
-	std::cout << "Tensor[" << N << "][" << C << "][" << H << "][" << W << "]" << std::endl << std::endl;
+	std::cerr << "===== scalarTensor func =====" << std::endl;
+	std::cerr << "Tensor[" << N << "][" << C << "][" << H << "][" << W << "]" << std::endl << std::endl;
 	int tot_size = N * C * H * W;
 	if (output.size() != tot_size)
 		output.resize(tot_size);
@@ -109,13 +109,13 @@ int argMax(std::vector<float> &output) {
 
 	return max_element(output.begin(), output.end()) - output.begin();
 }
-//std::cout << "index : "<< argMax(output) << " , label name : " << class_names[argMax(output) ] << " , prob : " << output[argMax(output) ] << std::endl;
+//std::cerr << "index : "<< argMax(output) << " , label name : " << class_names[argMax(output) ] << " , prob : " << output[argMax(output) ] << std::endl;
 
 
 
 std::map<std::string, nvinfer1::Weights> loadWeights(const std::string file)
 {
-	std::cout << "Loading weights: " << file << std::endl;
+	std::cerr << "Loading weights: " << file << std::endl;
 	std::map<std::string, nvinfer1::Weights> weightMap;
 
 	// Open weights file
@@ -154,10 +154,10 @@ std::map<std::string, nvinfer1::Weights> loadWeights(const std::string file)
 
 void show_dims(nvinfer1::ITensor* tensor)
 {
-	std::cout << "=== show dims ===" << std::endl;
+	std::cerr << "=== show dims ===" << std::endl;
 	int dims = tensor->getDimensions().nbDims;
-	std::cout << "size :: " << dims << std::endl;
+	std::cerr << "size :: " << dims << std::endl;
 	for (int i = 0; i < dims; i++) {
-		std::cout << tensor->getDimensions().d[i] << std::endl;
+		std::cerr << tensor->getDimensions().d[i] << std::endl;
 	}
 }

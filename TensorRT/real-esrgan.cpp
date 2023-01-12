@@ -6,10 +6,16 @@
 #include "json.hpp"
 #include <filesystem>
 #include "blockingconcurrentqueue.h"
+#include <stdio.h>
+#include <io.h>
+#include <fcntl.h>
 
 using namespace nvinfer1;
 namespace fs = std::filesystem;
 sample::Logger gLogger;
+
+using std::cerr;
+using std::endl;
 
 // stuff we know about the network and the input/output blobs
 static int INPUT_H = -1;
@@ -32,27 +38,38 @@ fs::path engine_file_path;
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 
-moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, fs::directory_entry>> load_to_proc;
+moodycamel::BlockingConcurrentQueue<std::vector<uint8_t>> load_to_proc;
 moodycamel::BlockingConcurrentQueue<int> proc_to_load;
-moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, fs::directory_entry>> proc_to_save;
+moodycamel::BlockingConcurrentQueue<std::vector<uint8_t>> proc_to_save;
 moodycamel::BlockingConcurrentQueue<int> save_to_proc;
 
 void load()
 {
-    cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
-    cv::Mat ori_img;
+    unsigned int frame_length = maxBatchSize * INPUT_H * INPUT_W * INPUT_C;
+    //cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
+    //cv::Mat ori_img;
 
     int load_to_proc_size = -5;//max queue size
-
-    for (auto const& dir_entry : fs::directory_iterator{ INPUT_dir })
+    int count = 0;
+    while (!feof(stdin))
     {
-        cv::Mat ori_img = cv::imread(dir_entry.path().string());
-        cv::resize(ori_img, img, img.size()); // resize image to input size
-        std::vector<uint8_t> data{ img.data ,img.data + maxBatchSize * INPUT_H * INPUT_W * INPUT_C };
+        count++;
+
+        std::vector<uint8_t> buf(frame_length);
+        auto r = fread(buf.data(), 1, frame_length, stdin);
+        if (r != frame_length)
+        {
+            if (feof(stdin)) break;
+            if (ferror(stdin))
+            {
+                perror("freopen");
+                exit(2);
+            }
+        };
 
         load_to_proc_size++;
-        load_to_proc.enqueue({ std::move(data), dir_entry });
-        //std::cout << "load_to_proc.enqueue" << dir_entry <<std::endl;
+        load_to_proc.enqueue(std::move(buf));
+        //cerr << "load_to_proc.enqueue, " << count <<endl;
 
         if (load_to_proc_size > 0)
         {
@@ -62,7 +79,8 @@ void load()
         }
     }
 
-    load_to_proc.enqueue({ std::vector<uint8_t>{}, fs::directory_entry{} });
+    //cerr << "load thread, eof" << endl;
+    load_to_proc.enqueue({});
 }
 
 void proc()
@@ -70,7 +88,7 @@ void proc()
     // 2) Load engine file 
     char* trtModelStream{ nullptr };
     size_t size{ 0 };
-    std::cout << "===== Engine file load =====" << std::endl << std::endl;
+    cerr << "===== Engine file load =====" << endl << endl;
     std::ifstream file(engine_file_path, std::ios::binary);
     if (file.good()) {
         file.seekg(0, file.end);
@@ -81,12 +99,12 @@ void proc()
         file.close();
     }
     else {
-        std::cout << "[ERROR] Engine file load error" << std::endl;
+        cerr << "[ERROR] Engine file load error" << endl;
         exit(1);
     }
 
     // 3) Engine file deserialize
-    std::cout << "===== Engine file deserialize =====" << std::endl << std::endl;
+    cerr << "===== Engine file deserialize =====" << endl << endl;
     IRuntime* runtime = createInferRuntime(gLogger);
     ICudaEngine* engine = runtime->deserializeCudaEngine(trtModelStream, size);
     IExecutionContext* context = engine->createExecutionContext();
@@ -106,21 +124,21 @@ void proc()
     int proc_to_save_size = -5;//max queue size
     for (;;)
     {
-        std::tuple<std::vector<uint8_t>, fs::directory_entry> input;
+        std::vector<uint8_t> input;
         std::vector<uint8_t> outputs(OUTPUT_SIZE);
 
         load_to_proc.wait_dequeue(input);
         proc_to_load.enqueue(0);
-        if (std::get<0>(input).size() == 0) break;
+        if (input.size() == 0) break;
 
-        CHECK(cudaMemcpyAsync(buffers[inputIndex], std::get<0>(input).data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
+        CHECK(cudaMemcpyAsync(buffers[inputIndex], input.data(), maxBatchSize * INPUT_C * INPUT_H * INPUT_W * sizeof(uint8_t), cudaMemcpyHostToDevice, stream));
         context->enqueue(maxBatchSize, buffers, stream, nullptr);
         CHECK(cudaMemcpyAsync(outputs.data(), buffers[outputIndex], maxBatchSize * OUTPUT_SIZE * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream));
         cudaStreamSynchronize(stream);
 
         proc_to_save_size++;
-        proc_to_save.enqueue({ std::move(outputs) ,std::get<1>(input) });
-        //std::cout << "proc_to_save.enqueue" << std::get<1>(input) <<std::endl;
+        proc_to_save.enqueue(std::move(outputs));
+        //cerr << "proc_to_save.enqueue" << std::get<1>(input) <<endl;
 
         if (proc_to_save_size > 0)
         {
@@ -138,36 +156,40 @@ void proc()
     engine->destroy();
     runtime->destroy();
 
-    proc_to_save.enqueue({ std::vector<uint8_t>{}, fs::directory_entry{} });
+    proc_to_save.enqueue({});
 }
 
 void save()
 {
     cv::Mat img(OUTPUT_H, OUTPUT_W, CV_8UC3);
+    size_t length = img.total() * img.elemSize();
     auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     int count = 0;
     for (;;)
     {
-        std::tuple<std::vector<uint8_t>, fs::directory_entry> data;
+        std::vector<uint8_t> data; ;
 
         proc_to_save.wait_dequeue(data);
         save_to_proc.enqueue(0);
-        if (std::get<0>(data).size() == 0) break;
+        if (data.size() == 0) break;
 
-        cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, std::get<0>(data).data());
+        cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, data.data());
         //cv::imshow("result", frame);
         //cv::waitKey(0);
-        bool need_resize = INPUT_H * OUT_SCALE > OUTPUT_H;
+        bool need_resize = INPUT_H * OUT_SCALE > OUTPUT_H; ;
         if (need_resize) cv::resize(frame, img, img.size(), 0, 0, cv::INTER_AREA); // resize image to output size
-        cv::imwrite((OUTPUT_dir / std::get<1>(data).path().filename()).string(), need_resize ? img : frame);
-        //std::cout << "cv::imwrite" << std::get<1>(data) << std::endl;
-        //tofile(outputs, "../Validation_py/c"); // ouputs data to files
+        size_t r = fwrite((need_resize ? img : frame).data, 1, length, stdout);
+        if (r != length)
+        {
+            perror("TensorRT.exe : stdout broken");
+            exit(3);
+        }
 
         count++;
         if (count % 10 == 0)
         {
             auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
-            std::cout << ((double)count) / dur * 1e3 << " fps/s" << std::endl;
+            cerr << ((double)count) / dur * 1e3 << " fps/s" << endl;
             start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             count = 0;
         }
@@ -177,7 +199,7 @@ void save()
 // Creat the engine using only the API and not any parser.
 void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, fs::path engineFile, fs::path module)
 {
-    std::cout << "==== model build start ====" << std::endl << std::endl;
+    cerr << "==== model build start ====" << endl << endl;
     INetworkDefinition* network = builder->createNetworkV2(0U);
     std::map<std::string, Weights> weightMap;
     weightMap = loadWeights(module.string());//not good but work
@@ -285,32 +307,32 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
     config->setMaxWorkspaceSize(1ULL << 29);  // 512MB
 
     if (precision_mode == 16) {
-        std::cout << "==== precision f16 ====" << std::endl << std::endl;
+        cerr << "==== precision f16 ====" << endl << endl;
         config->setFlag(BuilderFlag::kFP16);
     }
     else if (precision_mode == 8) {
-        //std::cout << "==== precision int8 ====" << std::endl << std::endl;
-        //std::cout << "Your platform support int8: " << builder->platformHasFastInt8() << std::endl;
+        //cerr << "==== precision int8 ====" << endl << endl;
+        //cerr << "Your platform support int8: " << builder->platformHasFastInt8() << endl;
         //assert(builder->platformHasFastInt8());
         //config->setFlag(BuilderFlag::kINT8);
         //Int8EntropyCalibrator2 *calibrator = new Int8EntropyCalibrator2(maxBatchSize, INPUT_W, INPUT_H, 0, "../data_calib/", "../Int8_calib_table/real-esrgan_int8_calib.table", INPUT_BLOB_NAME);
         //config->setInt8Calibrator(calibrator);
     }
     else {
-        std::cout << "==== precision f32 ====" << std::endl << std::endl;
+        cerr << "==== precision f32 ====" << endl << endl;
     }
 
-    std::cout << "Building engine, please wait for a while..." << std::endl;
+    cerr << "Building engine, please wait for a while..." << endl;
     IHostMemory* engine = builder->buildSerializedNetwork(*network, *config);
-    std::cout << "==== model build done ====" << std::endl << std::endl;
+    cerr << "==== model build done ====" << endl << endl;
 
-    std::cout << "==== model selialize start ====" << std::endl << std::endl;
+    cerr << "==== model selialize start ====" << endl << endl;
     std::ofstream p(engineFile, std::ios::binary);
     if (!p) {
-        std::cerr << "could not open plan output file" << std::endl << std::endl;
+        std::cerr << "could not open plan output file" << endl << endl;
     }
     p.write(reinterpret_cast<const char*>(engine->data()), engine->size());
-    std::cout << "==== model selialize done ====" << std::endl << std::endl;
+    cerr << "==== model selialize done ====" << endl << endl;
 
     engine->destroy();
     network->destroy();
@@ -330,12 +352,20 @@ int main()
 
     ::SetDllDirectoryA((exe_path / "vsmlrt-cuda").string().c_str());
     fs::path modulePath = exe_path / "module";
-    std::cout << "modulePath: " << modulePath << std::endl;
+    cerr << "modulePath: " << modulePath << endl;
+
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
 
     //config
     using json = nlohmann::json;
     std::ifstream config_if("TensorRT.config.json");
-    json j = json::parse(config_if);
+    json j = json::parse(config_if,nullptr,false);
+    if (j.is_discarded())
+    {
+        cerr << "TensorRT.exe : json::parse error" << endl;
+        exit(4);
+    };
 
     INPUT_H = j["INPUT_H"];
     INPUT_W = j["INPUT_W"];
@@ -347,12 +377,10 @@ int main()
 
     if (moduleName == "RealESRGAN_x4plus") OUT_SCALE = 4;
     else if (moduleName == "RealESRGAN_x2plus") OUT_SCALE = 2;
-    else std::cout << "unkown moduleName, must manual config OUT_SCALE" << std::endl;
+    else cerr << "unkown moduleName, must manual config OUT_SCALE" << endl;
 
     OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
     precision_mode = j["precision_mode"];
-    INPUT_dir = fs::current_path() / j["INPUT"];
-    OUTPUT_dir = fs::current_path() / j["OUTPUT"];
 
     //
     maxBatchSize = j["maxBatchSize"];	// batch size 
@@ -372,18 +400,26 @@ int main()
 
     // 1) Generation engine file (decide whether to create a new engine with serialize and exist_engine variable)
     if (!((serialize == false)/*Serialize flag*/ && (exist_engine == true) /*engine existence flag*/)) {
-        std::cout << "===== Create Engine file =====" << std::endl << std::endl;
+        cerr << "===== Create Engine file =====" << endl << endl;
         IBuilder* builder = createInferBuilder(gLogger);
         IBuilderConfig* config = builder->createBuilderConfig();
         createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path, (modulePath / moduleName).replace_extension(".wts")); // generation TensorRT Model
         builder->destroy();
         config->destroy();
-        std::cout << "===== Create Engine file =====" << std::endl << std::endl;
+        cerr << "===== Create Engine file =====" << endl << endl;
     }
 
+    {
+        cv::Mat img(OUTPUT_H, OUTPUT_W, CV_8UC3);
+        if (!img.isContinuous())
+        {
+            cerr << "img.isContinuous() false" << endl;
+            exit(3);
+        }; // don't know what to do
+    }
 
     // 4) Prepare image data for inputs
-    std::cout << "===== Begin img process =====" << std::endl << std::endl;
+    cerr << "===== Begin img process =====" << endl << endl;
 
     std::thread load_thread(load);
     std::thread proc_thread(proc);
@@ -393,7 +429,7 @@ int main()
     proc_thread.join();
     save_thread.join();
 
-    std::cout << "===== exit normally =====" << std::endl << std::endl;
+    cerr << "TensorRT.exe ===== exit normally =====" << endl << endl;
 
     return 0;
 }

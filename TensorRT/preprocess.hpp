@@ -90,7 +90,7 @@ namespace nvinfer1
             const int pb = mPreprocess.pb;
             const int pl = mPreprocess.pl;
             const int pr = mPreprocess.pr;
-            //std::cout << "preproc_type : " << p_type  << std::endl;
+            //std::cerr << "preproc_type : " << p_type  << std::endl;
             switch (p_type) {
             case 0: // vgg11, resnet18, unet
                 void preprocess_cu_0(float* output, unsigned char*input, int batchSize, int height, int width, int channel, cudaStream_t stream);
@@ -107,14 +107,14 @@ namespace nvinfer1
                 preprocess_cu_3(output, input, batchSize, P, Q, P0, Q0, H, W, pt, pb, pl, pr, stream);
                 break;
             default:
-                std::cout << "Unknown";
+                std::cerr << "Unknown";
                 break;
             }
 
             // 출력 검증
             //cudaDeviceSynchronize();
             //int count = batchSize * H * W * C;
-            //std::cout << "count : " << count << std::endl;
+            //std::cerr << "count : " << count << std::endl;
             //std::vector<float> gpuBuffer(count);
             //cudaMemcpy(gpuBuffer.data(), output, gpuBuffer.size() * sizeof(float), cudaMemcpyDeviceToHost);
             //std::ofstream ofs("../Validation_py/trt_0", std::ios::binary);
@@ -126,7 +126,7 @@ namespace nvinfer1
             // 입력 검증
             //cudaDeviceSynchronize();
             //int count = batchSize * H * W * C;
-            //std::cout << "count : " << count << std::endl;
+            //std::cerr << "count : " << count << std::endl;
             //std::vector<uint8_t> gpuBuffer(count);
             //cudaMemcpy(gpuBuffer.data(), input, gpuBuffer.size() * sizeof(uint8_t), cudaMemcpyDeviceToHost);
             //std::ofstream ofs("../Validation_py/trt_1", std::ios::binary);
