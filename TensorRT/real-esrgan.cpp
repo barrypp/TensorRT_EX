@@ -185,14 +185,14 @@ void save()
             exit(3);
         }
 
-        count++;
-        if (count % 10 == 0)
-        {
-            auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
-            cerr << ((double)count) / dur * 1e3 << " fps/s" << endl;
-            start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            count = 0;
-        }
+        //count++;
+        //if (count % 10 == 0)
+        //{
+        //    auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() - start;
+        //    cerr << ((double)count) / dur * 1e3 << " fps/s" << endl;
+        //    start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        //    count = 0;
+        //}
     }
 }
 
