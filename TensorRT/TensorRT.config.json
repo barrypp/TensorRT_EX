@@ -2,6 +2,8 @@
     "INPUT_H": 720,
     "INPUT_W": 1280,
     "INPUT_C": 3,
+    "OUTPUT_H": 2160,
+    "OUTPUT_W": 3840,    
     "OUT_SCALE": 4,
     "precision_mode": 16,
     "maxBatchSize":1,

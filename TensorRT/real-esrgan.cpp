@@ -7,38 +7,38 @@
 #include <filesystem>
 #include "blockingconcurrentqueue.h"
 
-
 using namespace nvinfer1;
+namespace fs = std::filesystem;
 sample::Logger gLogger;
 
 // stuff we know about the network and the input/output blobs
 static int INPUT_H = -1;
 static int INPUT_W = -1;
 static int INPUT_C = -1;
+static int OUTPUT_H = -1;
+static int OUTPUT_W = -1;
 static int OUT_SCALE = -1;
-static int OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
+static int OUTPUT_SIZE = -1;
 static int precision_mode = -1; // fp32 : 32, fp16 : 16, int8(ptq) : 8
 unsigned int maxBatchSize = 0;
 
 const std::string INPUT_BLOB_NAME = "INPUT";
 const std::string OUTPUT_BLOB_NAME = "OUTPUT";
 
-std::filesystem::path INPUT_dir;
-std::filesystem::path OUTPUT_dir;
-std::filesystem::path engine_file_path;
+fs::path INPUT_dir;
+fs::path OUTPUT_dir;
+fs::path engine_file_path;
 
 ITensor* residualDenseBlock(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 ITensor* RRDB(INetworkDefinition *network, std::map<std::string, Weights>& weightMap, ITensor* x, std::string lname);
 
-moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, std::filesystem::directory_entry>> load_to_proc;
+moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, fs::directory_entry>> load_to_proc;
 moodycamel::BlockingConcurrentQueue<int> proc_to_load;
-moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, std::filesystem::directory_entry>> proc_to_save;
+moodycamel::BlockingConcurrentQueue<std::tuple<std::vector<uint8_t>, fs::directory_entry>> proc_to_save;
 moodycamel::BlockingConcurrentQueue<int> save_to_proc;
 
 void load()
 {
-    namespace fs = std::filesystem;
-
     cv::Mat img(INPUT_H, INPUT_W, CV_8UC3);
     cv::Mat ori_img;
 
@@ -67,8 +67,6 @@ void load()
 
 void proc()
 {
-    namespace fs = std::filesystem;
-
     // 2) Load engine file 
     char* trtModelStream{ nullptr };
     size_t size{ 0 };
@@ -145,8 +143,7 @@ void proc()
 
 void save()
 {
-    namespace fs = std::filesystem;
-
+    cv::Mat img(OUTPUT_H, OUTPUT_W, CV_8UC3);
     auto start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     int count = 0;
     for (;;)
@@ -160,7 +157,9 @@ void save()
         cv::Mat frame = cv::Mat(INPUT_H * OUT_SCALE, INPUT_W * OUT_SCALE, CV_8UC3, std::get<0>(data).data());
         //cv::imshow("result", frame);
         //cv::waitKey(0);
-        cv::imwrite((OUTPUT_dir / std::get<1>(data).path().filename()).string(), frame);
+        bool need_resize = INPUT_H * OUT_SCALE > OUTPUT_H;
+        if (need_resize) cv::resize(frame, img, img.size(), 0, 0, cv::INTER_AREA); // resize image to output size
+        cv::imwrite((OUTPUT_dir / std::get<1>(data).path().filename()).string(), need_resize ? img : frame);
         //std::cout << "cv::imwrite" << std::get<1>(data) << std::endl;
         //tofile(outputs, "../Validation_py/c"); // ouputs data to files
 
@@ -176,19 +175,12 @@ void save()
 }
 
 // Creat the engine using only the API and not any parser.
-void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, const char* engineFileName, 
-    std::string modulePath, std::string moduleName)
+void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* config, DataType dt, fs::path engineFile, fs::path module)
 {
     std::cout << "==== model build start ====" << std::endl << std::endl;
     INetworkDefinition* network = builder->createNetworkV2(0U);
     std::map<std::string, Weights> weightMap;
-    weightMap = loadWeights("./" + modulePath + "/" + moduleName + ".wts");//not good but work
-    //if (OUT_SCALE == 2) {
-    //    weightMap = loadWeights("../Real-ESRGAN_py/RealESRGAN_x2plus.wts");
-    //}
-    //else {
-    //    weightMap = loadWeights("RealESRGAN_x4plus.wts");
-    //}
+    weightMap = loadWeights(module.string());//not good but work
     Weights emptywts{ DataType::kFLOAT, nullptr, 0 };
 
     ITensor* data = network->addInput(INPUT_BLOB_NAME.c_str(), dt, Dims3{ INPUT_H, INPUT_W, INPUT_C });
@@ -313,7 +305,7 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
     std::cout << "==== model build done ====" << std::endl << std::endl;
 
     std::cout << "==== model selialize start ====" << std::endl << std::endl;
-    std::ofstream p(engineFileName, std::ios::binary);
+    std::ofstream p(engineFile, std::ios::binary);
     if (!p) {
         std::cerr << "could not open plan output file" << std::endl << std::endl;
     }
@@ -332,10 +324,8 @@ void createEngine(unsigned int maxBatchSize, IBuilder* builder, IBuilderConfig* 
 
 int main()
 {
-    namespace fs = std::filesystem;
-
-    char* exe_path_raw[2048] = {'\0'};
-    GetModuleFileNameA(NULL, (LPSTR)exe_path_raw, 2048);
+    char* exe_path_raw[512] = {'\0'};
+    ::GetModuleFileNameA(NULL, (LPSTR)exe_path_raw, 2048);
     auto exe_path = fs::path{ std::string{ (char*)exe_path_raw } }.parent_path();
 
     ::SetDllDirectoryA((exe_path / "vsmlrt-cuda").string().c_str());
@@ -350,7 +340,15 @@ int main()
     INPUT_H = j["INPUT_H"];
     INPUT_W = j["INPUT_W"];
     INPUT_C = j["INPUT_C"];
+    OUTPUT_H = j["OUTPUT_H"];
+    OUTPUT_W = j["OUTPUT_W"];
     OUT_SCALE = j["OUT_SCALE"];
+    std::string moduleName = j["moduleName"];	// model name
+
+    if (moduleName == "RealESRGAN_x4plus") OUT_SCALE = 4;
+    else if (moduleName == "RealESRGAN_x2plus") OUT_SCALE = 2;
+    else std::cout << "unkown moduleName, must manual config OUT_SCALE" << std::endl;
+
     OUTPUT_SIZE = INPUT_C * INPUT_H * OUT_SCALE * INPUT_W * OUT_SCALE;
     precision_mode = j["precision_mode"];
     INPUT_dir = fs::current_path() / j["INPUT"];
@@ -359,7 +357,7 @@ int main()
     //
     maxBatchSize = j["maxBatchSize"];	// batch size 
     bool serialize = j["serialize"];			// TensorRT Model Serialize flag(true : generate engine, false : if no engine file, generate engine )
-    std::string moduleName = j["moduleName"];	// model name
+    
     
     char engine_file_name[256];
     sprintf(engine_file_name, "%s_%d_" "%d_%d_%d_" "%d_" ".engine", moduleName.c_str(),
@@ -377,7 +375,7 @@ int main()
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
         IBuilder* builder = createInferBuilder(gLogger);
         IBuilderConfig* config = builder->createBuilderConfig();
-        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path.string().c_str(), modulePath.string(), moduleName); // generation TensorRT Model
+        createEngine(maxBatchSize, builder, config, DataType::kFLOAT, engine_file_path, (modulePath / moduleName).replace_extension(".wts")); // generation TensorRT Model
         builder->destroy();
         config->destroy();
         std::cout << "===== Create Engine file =====" << std::endl << std::endl;
