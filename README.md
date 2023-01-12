@@ -7,10 +7,10 @@
   - TensorRT https://developer.nvidia.com/tensorrt
   - opencv, https://github.com/opencv/opencv/releases
 
-- exe runtime prepare (no build)
+- runtime prepare (no build)
   - vsmlrt-cuda, for cuda dll, https://github.com/AmusementClub/vs-mlrt/releases
   - opencv dll, https://github.com/opencv/opencv/releases
-  - make sure following dir structure
+  - exe dir (could add to system path)
 	- ./vsmlrt-cuda/nvblas64_11.dll
 	- ./vsmlrt-cuda/nvinfer_builder_resource.dll
 	- ./vsmlrt-cuda/...
@@ -18,11 +18,13 @@
 	- ./opencv_world470.dll
 	- ./module/RealESRGAN_x4plus.wts
 	- ./module/...
-	- ./INPUT/...
-	- ./OUTPUT/...
-	- ./TensorRT.exe
-	- ./TensorRT.config.json
-	
+	- ./TensorRT_Real_ESRGAN.exe
+  - data dir (input and output of video, could be same as exe dir)
+    - ./TensorRT.config.json
+	- ./1.mp4
+
+- usage (at data dir)
+  - ffmpeg -i 1.mp4 -f rawvideo -pix_fmt bgr24 pipe:1 2>in.txt | TensorRT_Real_ESRGAN | ffmpeg -y -f rawvideo -pixel_format bgr24 -video_size 3840x2160 -framerate 24 -i - 2.mkv
 
 ## Enviroments (original)
 ***
